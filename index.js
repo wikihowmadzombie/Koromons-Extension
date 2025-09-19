@@ -3,9 +3,9 @@
 // @namespace   arz/ami
 // @version     2.0
 // @description Values Show up on limiteds,User Profiles, Users Collectibles Page and Trades.
-// @match       *://korome.zip/*
-// @match       *://www.korone.zip/*
-// @match       *://*.korone.zip/*
+// @match       *://pekora.zip/*
+// @match       *://www.Pekora.zip/*
+// @match       *://*.Pekora.zip/*
 // @grant       GM_xmlhttpRequest
 // @run-at      document-idle
 // ==/UserScript==
@@ -52,7 +52,7 @@
   let valueMap = new Map();
   async function loadValues(){
     try{
-      const raw = await fetchJSON("https://koromons.vercel.app/api/items");
+      const raw = await fetchJSON("https://koromons.xyz/api/items");
       valueMap = new Map();
       if(Array.isArray(raw)){
         raw.forEach(it=>{
@@ -754,7 +754,7 @@
 
   async function fetchLatestPlayerSnapshot(userId){
     if(!userId) return null;
-    const url = `https://koromons.vercel.app/api/player-history?playerId=${encodeURIComponent(userId)}`;
+    const url = `https://koromons.xyz/api/player-history?playerId=${encodeURIComponent(userId)}`;
     try{
       const data = await fetchJSON(url);
       if(!data) return null;
@@ -807,7 +807,7 @@
       if(existing){
         existing.dataset.pekoraUserid = userId;
         const a = existing.querySelector('a');
-        if(a){ a.href = `https://koromons.vercel.app/player/${encodeURIComponent(userId)}`; const span = a.querySelector('.pekora-value-num'); if(span) span.textContent = displayText; }
+        if(a){ a.href = `https://koromons.xyz/player/${encodeURIComponent(userId)}`; const span = a.querySelector('.pekora-value-num'); if(span) span.textContent = displayText; }
         if(usernameEl){
           if(existing.previousSibling !== usernameEl && existing.nextSibling !== usernameEl){
             try{ insertAfter(usernameEl, existing); }catch(e){}
@@ -826,7 +826,7 @@
       const a = document.createElement('a');
       a.target = '_blank';
       a.rel = 'noopener noreferrer';
-      a.href = `https://koromons.vercel.app/player/${encodeURIComponent(userId)}`;
+      a.href = `https://koromons.xyz/player/${encodeURIComponent(userId)}`;
       a.title = "Open pekoramons profile (opens new tab)";
       a.innerHTML = `<b>Value</b> <span class="pekora-value-num">${displayText}</span>`;
       a.style.textDecoration = 'none';
