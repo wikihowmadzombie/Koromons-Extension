@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name        Pekoramons Trading Extension
+// @name         Koromons Trading Extension
 // @namespace   arz/ami
 // @version     2.0
 // @description Values Show up on limiteds,User Profiles, Users Collectibles Page and Trades.
