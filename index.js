@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         Koromons Trading Extension
-// @namespace   arz/ami
-// @version     2.0
-// @description Values Show up on limiteds,User Profiles, Users Collectibles Page and Trades.
-// @match       *://pekora.zip/*
-// @match       *://www.Pekora.zip/*
-// @match       *://*.Pekora.zip/*
-// @grant       GM_xmlhttpRequest
-// @run-at      document-idle
+// @namespace    arz/ami
+// @version      2.3
+// @description  Values Show up on limiteds,User Profiles, Users Collectibles Page and Trades.
+// @match        *://pekora.zip/*
+// @match        *://www.Pekora.zip/*
+// @match        *://*.Pekora.zip/*
+// @grant        GM_xmlhttpRequest
+// @run-at       document-idle
 // ==/UserScript==
 
 (async function(){
@@ -19,7 +19,7 @@
   function cleanName(name){
     if(!name || typeof name !== "string") return "";
     return name.replace(/[\u200B-\u200F\uFEFF]/g,"")
-               .replace(/[^a-zA-Z0-9 ]/g," ")
+               .replace(/[^a-zA-Z0-2 0-9 ]/g," ")
                .replace(/\s+/g," ")
                .trim()
                .toLowerCase();
@@ -451,7 +451,7 @@
         if(existsByNameOrSrc) continue;
 
         const value = lookupValueForName(name);
-        if(value === undefined || value === null) continue; // IMPORTANT: skip undefined -> no hover N/A
+        if(value === undefined || value === null) continue;
 
         const valueText = formatNumber(value);
 
@@ -690,88 +690,36 @@
       const mm = href.match(/playerId=(\d+)/i) || href.match(/userId=(\d+)/i) || href.match(/\/player\/(\d+)/i) || href.match(/\/users\/(\d+)/i);
       if(mm) return mm[1];
     }
-    const meta = document.querySelector('meta[name="player-id"], meta[name="user-id"], meta[property="og:url"]');
-    if(meta && meta.content){
-      let mm = (meta.content||"").match(/\/player\/(\d+)/i) || (meta.content||"").match(/\/users\/(\d+)/i) || (meta.content||"").match(/(\d{3,})/);
-      if(mm) return mm[1];
-    }
-    const candidate = document.querySelector('[data-player-id],[data-user-id],[data-userid],[data-playerid]');
-    if(candidate){
-      const attrs = ['data-player-id','data-user-id','data-userid','data-playerid'];
-      for(const aName of attrs) if(candidate.hasAttribute(aName)) return candidate.getAttribute(aName);
-    }
     return null;
   }
 
   function isProfilePage(){
     const p = location.pathname || "";
-    if(/\/player\/\d+/.test(p) || /\/users\/\d+/.test(p)) return true;
-    try{
-      if(document.querySelector('.profile') || document.querySelector('.profile-header') || document.querySelector('.user-profile') || document.querySelector('.profile-top')) return true;
-    }catch(e){}
-    return false;
+    return /\/users\/\d+\/profile/i.test(p) || /\/player\/\d+/.test(p);
   }
 
   function findUsernameElement(){
     const selectors = [
-      '.username-0-2-159',
-      '.username',
-      '.profile-username',
-      '.profile-header .username',
-      '.user-profile h1',
-      '.profile-top h1',
-      '.display-name',
-      '.profile .username',
-      '.profileHeader',
-      'h1.username',
-      'h1.display-name',
-      'h1',
-      'h2'
+      '.username','.profile-username','.display-name','h1.username','h1.display-name','h1','h2'
     ];
     for(const sel of selectors){
-      try{
-        const el = document.querySelector(sel);
-        if(el && (el.textContent || '').trim().length) return el;
-      }catch(e){}
+      const el = document.querySelector(sel);
+      if(el && el.textContent.trim()) return el;
     }
-    try{
-      const headers = Array.from(document.querySelectorAll('h1,h2')).filter(h => (h.textContent||'').trim().length > 1);
-      if(headers.length){
-        let best = headers[0];
-        let bestArea = 0;
-        for(const h of headers){
-          try{
-            const r = h.getBoundingClientRect();
-            const area = r.width * r.height;
-            if(area > bestArea){ bestArea = area; best = h; }
-          }catch(e){}
-        }
-        return best;
-      }
-    }catch(e){}
     return null;
   }
 
   async function fetchLatestPlayerSnapshot(userId){
     if(!userId) return null;
-    const url = `https://koromons.xyz/api/player-history?playerId=${encodeURIComponent(userId)}`;
+    const url = `https://koromons.xyz/api/users/${encodeURIComponent(userId)}`;
     try{
       const data = await fetchJSON(url);
       if(!data) return null;
-      if(Array.isArray(data)){
-        for(let i=data.length-1;i>=0;i--){
-          if(data[i] && typeof data[i] === 'object' && ('value' in data[i] || 'rap' in data[i])) return data[i];
-        }
-      }
-      if(data.history && Array.isArray(data.history) && data.history.length) return data.history[data.history.length - 1];
-      for(const k of Object.keys(data)){
-        const v = data[k];
-        if(Array.isArray(v)){
-          for(let i=v.length-1;i>=0;i--) if(v[i] && typeof v[i] === 'object' && ('value' in v[i] || 'rap' in v[i])) return v[i];
-        }
-      }
-      if(typeof data === 'object' && ('value' in data || 'rap' in data)) return data;
-      return null;
+      return {
+        value: Number(data.totalValue) || 0,
+        rank: data.leaderboardRank || null,
+        _raw: data
+      };
     }catch(e){
       log("fetchLatestPlayerSnapshot error", e && e.message ? e.message : e);
       return null;
@@ -779,10 +727,9 @@
   }
 
   function insertAfter(refNode, newNode){
-    try{
-      if(refNode && refNode.parentNode) refNode.parentNode.insertBefore(newNode, refNode.nextSibling);
-      else document.body.appendChild(newNode);
-    }catch(e){ try{ document.body.appendChild(newNode);}catch(e){} }
+    if(refNode && refNode.parentNode)
+      refNode.parentNode.insertBefore(newNode, refNode.nextSibling);
+    else document.body.appendChild(newNode);
   }
 
   async function ensureProfileValueBox(){
@@ -796,77 +743,62 @@
       const userId = getProfileUserIdFromDom();
       if(!userId) return false;
 
-      const snapshot = await fetchLatestPlayerSnapshot(userId);
-      const valueNum = snapshot && (('value' in snapshot) ? Number(snapshot.value) : (Number(snapshot.currentValue) || null));
-      const displayText = (valueNum === null || valueNum === undefined) ? "N/A" : formatNumber(valueNum);
+      const data = await fetchLatestPlayerSnapshot(userId);
+      const valueNum = data ? Number(data.value) || 0 : null;
+      const rankNum = data ? data.rank : null;
+      const displayVal = valueNum === null ? "N/A" : formatNumber(valueNum);
+      const displayRank = rankNum ? `#${rankNum}` : "N/A";
 
       const usernameEl = findUsernameElement();
-
       const existing = document.getElementById('pekora-profile-value-inline');
 
       if(existing){
         existing.dataset.pekoraUserid = userId;
         const a = existing.querySelector('a');
-        if(a){ a.href = `https://koromons.xyz/player/${encodeURIComponent(userId)}`; const span = a.querySelector('.pekora-value-num'); if(span) span.textContent = displayText; }
-        if(usernameEl){
-          if(existing.previousSibling !== usernameEl && existing.nextSibling !== usernameEl){
-            try{ insertAfter(usernameEl, existing); }catch(e){}
-          }
+        if(a){
+          a.href = `https://koromons.xyz/player/${encodeURIComponent(userId)}`;
+          const spanVal = a.querySelector('.pekora-value-num.value-num');
+          if(spanVal) spanVal.textContent = `${displayVal} | Rank: ${displayRank}`;
         }
-        existing.style.display = 'inline-block';
         return true;
       }
 
       const wrapper = document.createElement('div');
       wrapper.id = 'pekora-profile-value-inline';
       wrapper.dataset.pekoraUserid = userId;
-      wrapper.style.zIndex = 999999;
-      wrapper.style.marginLeft = '10px';
-      wrapper.style.display = 'inline-block';
       const a = document.createElement('a');
       a.target = '_blank';
       a.rel = 'noopener noreferrer';
       a.href = `https://koromons.xyz/player/${encodeURIComponent(userId)}`;
-      a.title = "Open pekoramons profile (opens new tab)";
-      a.innerHTML = `<b>Value</b> <span class="pekora-value-num">${displayText}</span>`;
-      a.style.textDecoration = 'none';
-      a.style.padding = '6px 10px';
-      a.style.borderRadius = '8px';
-      a.style.background = 'rgba(40,40,40,0.92)';
-      a.style.color = '#fff';
-      a.style.fontWeight = '700';
+      a.title = "Open koromons profile";
+      a.innerHTML = `<b>Value</b> <span class="pekora-value-num value-num">${displayVal} | Rank: ${displayRank}</span>`;
       wrapper.appendChild(a);
 
-      if(usernameEl && usernameEl.parentNode){
-        try{
-          insertAfter(usernameEl, wrapper);
-          return true;
-        }catch(e){
-        }
-      }
-
-      const rapAnchorInfo = findRapAnchorElement();
-      const rapAnchor = rapAnchorInfo ? rapAnchorInfo.anchor : null;
-      if(rapAnchor && rapAnchor.parentElement){
-        try{ insertAfter(rapAnchor, wrapper); return true; }catch(e){}
-      }
-
-      try{ (document.querySelector('main') || document.body).appendChild(wrapper); }catch(e){ document.body.appendChild(wrapper); }
+      if(usernameEl) insertAfter(usernameEl, wrapper);
+      else document.body.appendChild(wrapper);
       return true;
-    }catch(e){ console.error(LOG, "ensureProfileValueBox err", e); return false; }
+    }catch(e){
+      console.error(LOG,"ensureProfileValueBox err", e);
+      return false;
+    }
   }
 
   let __profile_retry_timer = null;
   function startProfileInsertRetries(maxAttempts = 12, intervalMs = 600){
-    if(!isProfilePage()){ const ex = document.getElementById('pekora-profile-value-inline'); if(ex) ex.remove(); return; }
+    if(!isProfilePage()){
+      const ex = document.getElementById('pekora-profile-value-inline');
+      if(ex) ex.remove();
+      return;
+    }
     let attempts = 0;
     if(__profile_retry_timer) clearInterval(__profile_retry_timer);
     __profile_retry_timer = setInterval(async ()=>{
       attempts++;
-      try {
-        const ok = await ensureProfileValueBox();
-        if(ok || attempts >= maxAttempts){ clearInterval(__profile_retry_timer); __profile_retry_timer = null; }
-      } catch(e){ if(attempts >= maxAttempts){ clearInterval(__profile_retry_timer); __profile_retry_timer = null; } }
+      const ok = await ensureProfileValueBox();
+      if(ok || attempts >= maxAttempts){
+        clearInterval(__profile_retry_timer);
+        __profile_retry_timer = null;
+      }
     }, intervalMs);
   }
 
