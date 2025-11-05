@@ -1,13 +1,16 @@
 // ==UserScript==
 // @name         Koromons Trading Extension
 // @namespace    arz/ami
-// @version      2.3
+// @version      2.0
 // @description  Values Show up on limiteds,User Profiles, Users Collectibles Page and Trades.
 // @match        *://pekora.zip/*
 // @match        *://www.Pekora.zip/*
 // @match        *://*.Pekora.zip/*
 // @grant        GM_xmlhttpRequest
+// @icon         https://files.catbox.moe/cyolc9.png
 // @run-at       document-idle
+// @updateURL    https://raw.githubusercontent.com/wikihowmadzombie/Koromons-Extension/refs/heads/main/index.js
+// @downloadURL  https://raw.githubusercontent.com/wikihowmadzombie/Koromons-Extension/refs/heads/main/index.js
 // ==/UserScript==
 
 (async function(){
@@ -819,4 +822,554 @@
   setInterval(removeStrayCatalogPill, 2500);
 
   log("KoroneEnhancer ready");
+})();
+
+(async function(){
+  "use strict";
+  const LOG = "[KoroneEnhancer]";
+  function log(...args){ console.log(LOG, ...args); }
+
+  function cleanName(name){
+    if(!name || typeof name !== "string") return "";
+    return name.replace(/[\u200B-\u200F\uFEFF]/g,"")
+               .replace(/[^a-zA-Z0-2 0-9 ]/g," ")
+               .replace(/\s+/g," ")
+               .trim()
+               .toLowerCase();
+  }
+  function formatNumber(n){
+    if(n === null || n === undefined || !isFinite(Number(n))) return "N/A";
+    n = Number(n);
+    if(n >= 1000000) return (n/1000000).toFixed(1) + "M";
+    if(n >= 1000) return (n/1000).toFixed(1) + "K";
+    return n.toLocaleString();
+  }
+  async function fetchJSON(url){
+    if(typeof GM_xmlhttpRequest === "function"){
+      return new Promise((resolve,reject)=>{
+        GM_xmlhttpRequest({
+          method: "GET",
+          url,
+          headers: { Accept: "application/json" },
+          onload: r => { try{ resolve(JSON.parse(r.responseText)); } catch(e){ reject(e); } },
+          onerror: e => reject(e)
+        });
+      });
+    } else {
+      const r = await fetch(url, { headers: { Accept: "application/json" }});
+      if(!r.ok) throw new Error("fetch failed " + r.status);
+      return r.json();
+    }
+  }
+
+  let valueMap = new Map();
+  async function loadValues(){
+    try{
+      const raw = await fetchJSON("https://koromons.xyz/api/items");
+      valueMap = new Map();
+      if(Array.isArray(raw)){
+        raw.forEach(it=>{
+          const n = (it.Name ?? it.name ?? "").toString();
+          if(!n) return;
+          const v = (typeof it.Value !== 'undefined' ? Number(it.Value) : (typeof it.value !== 'undefined' ? Number(it.value) : 0));
+          valueMap.set(cleanName(n), isFinite(v) ? v : 0);
+        });
+      } else if(raw && typeof raw === 'object'){
+        for(const k of Object.keys(raw)){
+          const v = raw[k];
+          if(Array.isArray(v)){
+            v.forEach(it=>{
+              const n = (it.Name ?? it.name ?? "").toString();
+              if(!n) return;
+              const val = (typeof it.Value !== 'undefined' ? Number(it.Value) : (typeof it.value !== 'undefined' ? Number(it.value) : 0));
+              valueMap.set(cleanName(n), isFinite(val) ? val : 0);
+            });
+          }
+        }
+      }
+      log("value map loaded ->", valueMap.size, "entries");
+    }catch(e){
+      log("couldn't fetch items API:", e && e.message ? e.message : e);
+      valueMap = new Map();
+    }
+  }
+  await loadValues();
+
+
+  function lookupValueForName(rawName){
+    if(!rawName) return undefined;
+    const name = String(rawName).trim();
+    const cleaned = cleanName(name);
+    if(valueMap.has(cleaned)) return valueMap.get(cleaned);
+
+    const stripped = name.replace(/\(.*?\)|\[.*?\]|\{.*?\}/g,"").trim();
+    const cleanedStripped = cleanName(stripped);
+    if(cleanedStripped && valueMap.has(cleanedStripped)) return valueMap.get(cleanedStripped);
+
+    // substring & approximate match
+    for(const [k,v] of valueMap.entries()){
+      if(!k) continue;
+      if(k === cleaned) return v;
+      if(k.length > 3 && cleaned.includes(k)) return v;
+      if(cleaned.length > 3 && k.includes(cleaned)) return v;
+      // try first two words
+      const kWords = k.split(' ').slice(0,2).join(' ');
+      if(kWords && cleaned.includes(kWords)) return v;
+    }
+    return undefined;
+  }
+
+  const css = `
+.pekora-value-clamp{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;text-overflow:ellipsis;white-space:normal;margin-top:6px;font-weight:300;font-family:"HCo Gotham SSm","Helvetica Neue",Helvetica,Arial,sans-serif;}
+.pekora-inserted-value{margin-top:8px;z-index:99999}
+.pekora-overlay{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:2147483600;overflow:visible}
+.custom-value-tag{font-family:Arial,sans-serif;display:inline-block;gap:6px;font-size:13px;padding:4px 8px;border-radius:6px;background:rgba(10,10,10,0.92);color:#e6ffed;white-space:nowrap;pointer-events:auto;user-select:none;line-height:1;position:absolute;z-index:2147483650;transform:translateX(-50%);max-width:calc(100% - 12px);box-sizing:border-box;overflow:hidden;text-overflow:ellipsis}
+.custom-value-tag.small{padding:3px 6px;font-size:12px;border-radius:5px;box-shadow:none !important}
+.custom-value-tag .value{color:#00e676;font-weight:700;font-size:13px}
+.custom-overpay-summary{font-family:Arial,sans-serif;position:fixed;pointer-events:auto;padding:8px 10px;border-radius:8px;min-width:140px;text-align:left;font-weight:700;font-size:13px;box-shadow:0 6px 24px rgba(0,0,0,0.5);background:rgba(12,12,12,0.96);color:#ffffff;line-height:1.1;z-index:2147483650;left:8px;bottom:10px;top:auto;right:auto;transform:none;max-width:calc(100% - 16px);box-sizing:border-box}
+.custom-overpay-summary .line span:first-child{ color: #ffffff; font-weight:700; }
+.custom-overpay-summary .title{
+  font-weight:800;
+  margin-bottom:6px;
+  font-size:14px;
+  color:#ffffff !important;
+}
+.custom-overpay-summary .line{margin-top:4px;font-size:13px;display:flex;justify-content:space-between;gap:8px;font-weight:600}
+.custom-overpay-summary .numbers{
+  font-weight:900;
+  margin-left:8px;
+  color:#ffffff !important;
+}
+.custom-overpay-summary .pos{color:#7ef39a!important}
+.custom-overpay-summary .neg{color:#ff7f7f!important}
+.collectible-value-inline{position:absolute;left:50%;transform:translateX(-50%);bottom:6px;pointer-events:auto;font-weight:700;font-size:12px;padding:3px 6px;border-radius:6px;background:rgba(8,8,8,0.85);color:#bfffd6;z-index:2147483650;white-space:nowrap}
+.trade-value-pill{display:inline-block;margin-top:6px;text-align:center;font-weight:800;font-size:12px;padding:4px 8px;border-radius:6px;background:rgba(7,7,7,0.92);color:#bfffd6;z-index:2147483650;white-space:nowrap}
+.trade-tooltip{position:fixed;padding:6px 8px;border-radius:6px;background:rgba(10,10,10,0.96);color:#fff;font-weight:700;font-size:13px;z-index:2147483750;pointer-events:none;transform:translate(-50%, -8px);white-space:nowrap}`
+;
+  const st = document.createElement("style");
+  st.textContent = css;
+  document.head.appendChild(st);
+
+
+  let tradeTooltip = null;
+  function showTooltip(text, pageX, pageY){
+    hideTooltip();
+    tradeTooltip = document.createElement('div');
+    tradeTooltip.className = 'trade-tooltip';
+    tradeTooltip.textContent = text;
+    document.body.appendChild(tradeTooltip);
+    if(typeof pageX === 'number') tradeTooltip.style.left = pageX + 'px';
+    if(typeof pageY === 'number') tradeTooltip.style.top = (pageY - 18) + 'px';
+  }
+  function moveTooltip(pageX, pageY){
+    if(!tradeTooltip) return;
+    tradeTooltip.style.left = pageX + 'px';
+    tradeTooltip.style.top = (pageY - 18) + 'px';
+  }
+  function hideTooltip(){
+    if(tradeTooltip){ try{ tradeTooltip.remove(); }catch(e){} tradeTooltip = null; }
+  }
+
+
+  const MODERN_ITEM_CARD = ".itemCard-0-2-134";
+  const MODERN_ITEM_NAME = ".itemName-0-2-143";
+  const MODERN_ITEM_IMAGE = ".image-0-2-146";
+
+  function isLikelyThumbnail(img){
+    if(!img) return false;
+    try{
+      if(img.offsetParent === null) return false;
+      const src = (img.src || "").toLowerCase();
+      const nw = img.naturalWidth || img.width || 0;
+      const nh = img.naturalHeight || img.height || 0;
+      if(Math.max(nw, nh) < 12) return false;
+      if(src.includes('avatar') || src.includes('profile')) return false;
+      if(src.includes('/catalog/') || src.includes('thumbnail') || src.includes('thumbnails') || src.includes('/asset') || /\d{4,}/.test(src)) return true;
+      return true;
+    }catch(e){ return false; }
+  }
+
+  function findTradeLeftContainers(){
+    const texts = Array.from(document.querySelectorAll('h1,h2,h3,h4,p,div,span')).filter(n => {
+      try{ const t = (n.textContent||"").trim().toLowerCase(); return t.startsWith('your offer') || t.startsWith('your request'); }catch(e){return false;}
+    });
+    if(texts.length){
+      const first = texts[0];
+      const container = first.closest('.col-3, .col-md-3, .leftColumn, .offerRequestCard-0-2-34') || first.parentElement;
+      return container;
+    }
+    const all = Array.from(document.querySelectorAll('body *')).find(el => {
+      try{ const txt = (el.textContent||"").toLowerCase(); return txt.includes('your offer') && txt.includes('your request'); }catch(e){return false;}
+    });
+    if(all) return all;
+    return null;
+  }
+
+  function findInventoryContainers(){
+    let myInv = null, partnerInv = null;
+    const headings = Array.from(document.querySelectorAll('h1,h2,h3,h4,p,div,span')).filter(n => {
+      try{ const t = (n.textContent||"").trim().toLowerCase(); return /my inventory|partner's inventory|partners inventory|partner inventory/.test(t); }catch(e){return false;}
+    });
+    for(const h of headings){
+      const txt = (h.textContent||"").trim().toLowerCase();
+      if(/my inventory/.test(txt) && !myInv) myInv = h.closest('section, .inventory, .col, .container, .panel') || h.parentElement;
+      if (/partner/.test(txt) && !partnerInv) partnerInv = h.closest('section, .inventory, .col, .container, .panel') || h.parentElement;
+    }
+    if(!myInv || !partnerInv){
+      myInv = myInv || document.querySelector('.myInventory, #MyInventory, .inventoryList, .inventoryContainer') || null;
+      partnerInv = partnerInv || document.querySelector('.partnerInventory, #PartnerInventory, .otherInventory, .friendInventory') || null;
+    }
+    return { myInv, partnerInv };
+  }
+
+
+  function readNameFromCardElement(el){
+    if(!el) return "";
+    try{
+      const nameAnchor = el.querySelector && (el.querySelector('.itemName-0-2-143 a, .itemName a, .item-name a, a[title], a[href*="/catalog/"]'));
+      if(nameAnchor && nameAnchor.textContent && nameAnchor.textContent.trim()) return nameAnchor.textContent.trim();
+
+      const nameElem = el.querySelector && (el.querySelector('.itemName-0-2-143, .itemName, .item-name, .title, p.fw-bolder, h4, h5'));
+      if(nameElem && nameElem.textContent && nameElem.textContent.trim()) return nameElem.textContent.trim();
+
+      const img = el.querySelector && (el.querySelector('img') || el.querySelector('image'));
+      if(img){
+        if(img.alt && img.alt.trim()) return img.alt.trim();
+        if(img.title && img.title.trim()) return img.title.trim();
+      }
+
+      if(el.parentElement){
+        const siblingsText = Array.from(el.parentElement.childNodes).map(n => (n.textContent||'').trim()).filter(Boolean);
+        if(siblingsText.length){
+          for(const s of siblingsText){
+            if(s.length > 1 && s.length < 80 && !/value|page|category|enter amount|send request/i.test(s)) return s;
+          }
+        }
+      }
+
+      const txt = (el.textContent||"").trim();
+      if(txt && txt.length < 120) {
+        const lines = txt.split('\n').map(l=>l.trim()).filter(Boolean);
+        for(const l of lines) if(l && !/value|enter amount|send request|page/i.test(l)) return l;
+      }
+    }catch(e){}
+    return "";
+  }
+
+
+  function createOrUpdatePillForImage(imgEl, value){
+    if(!imgEl) return null;
+    try{
+      let attachTo = imgEl.closest('.itemCard-0-2-134') || imgEl.closest('.itemColEntry-0-2-133') || imgEl.closest('td') || imgEl.parentElement || imgEl;
+      const existing = attachTo.querySelector && attachTo.querySelector('.trade-value-pill');
+      const display = (value === undefined || value === null) ? "N/A" : formatNumber(value);
+      if(existing){
+        existing.textContent = display;
+        existing.dataset.pekoraValue = String(Number(value) || 0);
+        return existing;
+      }
+      const pill = document.createElement('div');
+      pill.className = 'trade-value-pill';
+      pill.textContent = display;
+      pill.dataset.pekoraValue = String(Number(value) || 0);
+
+      pill.addEventListener('mouseenter', (ev)=> showTooltip((value === undefined || value === null) ? "N/A" : `${formatNumber(value)} R$`, ev.pageX, ev.pageY));
+      pill.addEventListener('mousemove', (ev)=> moveTooltip(ev.pageX, ev.pageY));
+      pill.addEventListener('mouseleave', hideTooltip);
+
+imgEl.addEventListener('mouseenter', (ev) =>
+  showTooltip((value === undefined || value === null) ? "N/A" : `${formatNumber(value)} R$`, ev.pageX, ev.pageY)
+);
+      imgEl.addEventListener('mousemove', (ev)=> moveTooltip(ev.pageX, ev.pageY));
+      imgEl.addEventListener('mouseleave', hideTooltip);
+
+      if(imgEl.nextElementSibling) imgEl.parentElement.insertBefore(pill, imgEl.nextElementSibling);
+      else attachTo.appendChild(pill);
+
+      return pill;
+    }catch(e){
+      console.error(LOG, "createOrUpdatePillForImage err", e);
+      return null;
+    }
+  }
+
+
+  function annotateModernCards(){
+    try{
+      const cards = Array.from(document.querySelectorAll(MODERN_ITEM_CARD));
+      for(const c of cards){
+        const name = readNameFromCardElement(c);
+        const v = lookupValueForName(name);
+
+        const img = c.querySelector(MODERN_ITEM_IMAGE) || c.querySelector('img');
+        if(img) createOrUpdatePillForImage(img, v);
+        try{ c.dataset.pekoraValue = String(Number(v) || 0); }catch(e){}
+      }
+    }catch(e){ console.error(LOG, "annotateModernCards err", e); }
+  }
+
+  function annotateImagesInContainer(container){
+    if(!container) return [];
+    const imgs = Array.from(container.querySelectorAll('img')).filter(isLikelyThumbnail);
+    const processed = [];
+    for(const img of imgs){
+      try{
+        const name = img.alt && img.alt.trim() ? img.alt.trim() : (img.title && img.title.trim() ? img.title.trim() : "");
+        if(!name){
+          const parent = img.parentElement;
+          const caption = parent && Array.from(parent.querySelectorAll('a, p, span, div')).map(n => (n.textContent||'').trim()).find(Boolean);
+          if(caption) name = caption;
+        }
+        const v = lookupValueForName(name || readNameFromCardElement(img.parentElement || img));
+        createOrUpdatePillForImage(img, v);
+        // annotate dataset on the parent container for sums
+        const attach = img.closest('td, .itemColEntry-0-2-133, .col-3, .card') || img.parentElement;
+        if(attach) try{ attach.dataset.pekoraValue = String(Number(v) || 0); }catch(e){}
+        processed.push(img);
+      }catch(e){}
+    }
+    return processed;
+  }
+
+
+  function findOfferRequestAreas(){
+    const modernCard = document.querySelector('.offerRequestCard-0-2-34');
+    if(modernCard){
+      const rows = Array.from(modernCard.querySelectorAll('.row.row-0-2-119, .row-0-2-119'));
+      const offerRow = rows.length >= 1 ? rows[0] : null;
+      const requestRow = rows.length >= 2 ? rows[1] : null;
+      return { offerRow, requestRow, container: modernCard };
+    }
+
+    const leftContainer = findTradeLeftContainers();
+    if(leftContainer){
+
+      const rows = Array.from(leftContainer.querySelectorAll('div, table, tbody, tr')).filter(n => n.querySelector && n.querySelector('img'));
+      const offerRow = rows[0] || leftContainer.querySelector('table, div');
+      const requestRow = rows[1] || Array.from(leftContainer.querySelectorAll('img')).slice(4).length ? leftContainer : null;
+      return { offerRow, requestRow, container: leftContainer };
+    }
+
+    const any = Array.from(document.querySelectorAll('div, section, main')).find(el => {
+      try{ const t = (el.textContent||"").toLowerCase(); return t.includes('your offer') && t.includes('your request'); }catch(e){return false;}
+    });
+    if(any){
+      const rows = Array.from(any.querySelectorAll('div, table')).filter(n => n.querySelector && n.querySelector('img'));
+      return { offerRow: rows[0] || null, requestRow: rows[1] || null, container: any };
+    }
+
+    return { offerRow: null, requestRow: null, container: null };
+  }
+
+  function findInventoryAreas(){
+    const invs = findInventoryContainers();
+    return { myInv: invs.myInv, partnerInv: invs.partnerInv };
+  }
+
+
+  function computeTradeTotals(){
+    try{
+      const { offerRow, requestRow } = findOfferRequestAreas();
+      let offerTotal = 0, requestTotal = 0;
+
+      if(offerRow){
+        const imgs = Array.from(offerRow.querySelectorAll('img')).filter(isLikelyThumbnail);
+        if(imgs.length){
+          for(const img of imgs){
+            const attach = img.closest('td, .itemColEntry-0-2-133, .col-3, .card') || img.parentElement;
+            const v = Number(attach && attach.dataset && attach.dataset.pekoraValue ? Number(attach.dataset.pekoraValue) : 0) || 0;
+            offerTotal += v;
+          }
+        } else {
+          const cards = Array.from(offerRow.querySelectorAll('.itemCard-0-2-134, .card'));
+          for(const c of cards){
+            const v = Number(c.dataset && c.dataset.pekoraValue ? Number(c.dataset.pekoraValue) : 0) || 0;
+            offerTotal += v;
+          }
+        }
+        try{
+          const plusInput = offerRow.closest('.offerRequestCard-0-2-34')?.querySelector('input.robuxInput-0-2-122, input[type="text"].robuxInput-0-2-122') ||
+                            offerRow.querySelector('input[type="text"], input');
+          if(plusInput && plusInput.value) offerTotal += Number((plusInput.value||'').replace(/[^0-9.-]/g,'')) || 0;
+        }catch(e){}
+      }
+
+      if(requestRow){
+        const imgs = Array.from(requestRow.querySelectorAll('img')).filter(isLikelyThumbnail);
+        if(imgs.length){
+          for(const img of imgs){
+            const attach = img.closest('td, .itemColEntry-0-2-133, .col-3, .card') || img.parentElement;
+            const v = Number(attach && attach.dataset && attach.dataset.pekoraValue ? Number(attach.dataset.pekoraValue) : 0) || 0;
+            requestTotal += v;
+          }
+        } else {
+          const cards = Array.from(requestRow.querySelectorAll('.itemCard-0-2-134, .card'));
+          for(const c of cards){
+            const v = Number(c.dataset && c.dataset.pekoraValue ? Number(c.dataset.pekoraValue) : 0) || 0;
+            requestTotal += v;
+          }
+        }
+        try{
+          const plusInput = requestRow.closest('.offerRequestCard-0-2-34')?.querySelector('input.robuxInput-0-2-122, input[type="text"].robuxInput-0-2-122') ||
+                            requestRow.querySelector('input[type="text"], input');
+          if(plusInput && plusInput.value) requestTotal += Number((plusInput.value||'').replace(/[^0-9.-]/g,'')) || 0;
+        }catch(e){}
+      }
+
+      return { offerTotal, requestTotal };
+    }catch(e){
+      console.error(LOG, "computeTradeTotals err", e);
+      return { offerTotal:0, requestTotal:0 };
+    }
+  }
+
+  function createOrUpdateFloatingSummary(offerTotal, requestTotal){
+    let el = document.getElementById('__pekora_trade_floating_summary');
+    const diff = Number(requestTotal) - Number(offerTotal);
+    const formattedOffer = formatNumber(offerTotal);
+    const formattedRequest = formatNumber(requestTotal);
+    const formattedDiff = (diff > 0 ? `+${formatNumber(diff)}` : formatNumber(diff));
+    if(!el){
+      el = document.createElement('div');
+      el.id = '__pekora_trade_floating_summary';
+      el.className = 'custom-overpay-summary';
+      el.style.position = 'fixed';
+      el.style.left = '12px';
+      el.style.bottom = '12px';
+el.innerHTML = `
+  <div class="title">Trade Summary</div>
+  <div class="line"><span>You're offering</span><span class="numbers offer-num"></span></div>
+  <div class="line"><span>They're offering</span><span class="numbers request-num"></span></div>
+  <div class="line"><span>Difference</span><span class="numbers diff-num"></span></div> `;
+
+      document.body.appendChild(el);
+    }
+    const offerNode = el.querySelector('.offer-num');
+    const reqNode = el.querySelector('.request-num');
+    const diffNode = el.querySelector('.diff-num');
+    if(offerNode) offerNode.textContent = formattedOffer;
+    if(reqNode) reqNode.textContent = formattedRequest;
+    if(diffNode){
+      diffNode.textContent = formattedDiff;
+      diffNode.classList.remove('pos','neg');
+      if(diff > 0) diffNode.classList.add('pos');
+      else if(diff < 0) diffNode.classList.add('neg');
+    }
+  }
+
+
+  function updateAllTradeAnnotations(){
+    try{
+      if(!/\/Trade\/TradeWindow\.aspx/i.test(location.pathname)){
+        const prev = document.getElementById('__pekora_trade_floating_summary');
+        if(prev) prev.remove();
+        return;
+      }
+
+      if(!window.__pekora_last_values_reload) window.__pekora_last_values_reload = Date.now();
+      if(Date.now() - window.__pekora_last_values_reload > 30000){
+        window.__pekora_last_values_reload = Date.now();
+        loadValues().catch(()=>{});
+      }
+
+      annotateModernCards();
+
+      const { offerRow, requestRow } = findOfferRequestAreas();
+      const { myInv, partnerInv } = findInventoryAreas();
+
+      if(offerRow) annotateImagesInContainer(offerRow);
+      if(requestRow) annotateImagesInContainer(requestRow);
+      if(myInv) annotateImagesInContainer(myInv);
+      if(partnerInv) annotateImagesInContainer(partnerInv);
+
+      const allImgs = Array.from(document.querySelectorAll('img')).filter(isLikelyThumbnail);
+      for(const img of allImgs) {
+        const attach = img.closest('td, .itemColEntry-0-2-133, .col-3, .card') || img.parentElement;
+        if(attach && attach.querySelector && attach.querySelector('.trade-value-pill')) continue;
+        const guessName = img.alt && img.alt.trim() ? img.alt.trim() : readNameFromCardElement(img.parentElement || img);
+        const v = lookupValueForName(guessName);
+        createOrUpdatePillForImage(img, v);
+        if(attach) try{ attach.dataset.pekoraValue = String(Number(v) || 0); }catch(e){}
+      }
+
+      const totals = computeTradeTotals();
+      createOrUpdateFloatingSummary(totals.offerTotal, totals.requestTotal);
+
+    }catch(e){
+      console.error(LOG, "updateAllTradeAnnotations err", e);
+    }
+  }
+
+
+  let updateInterval = null;
+  let mo = null;
+  function startTradeEnhancer(){
+    if(updateInterval) return;
+    updateAllTradeAnnotations();
+    updateInterval = setInterval(updateAllTradeAnnotations, 1000);
+
+    if(!mo){
+      mo = new MutationObserver((muts) => {
+        if(window.__pekora_trade_debounce) clearTimeout(window.__pekora_trade_debounce);
+        window.__pekora_trade_debounce = setTimeout(()=> {
+          try{ updateAllTradeAnnotations(); }catch(e){}
+        }, 70);
+      });
+      mo.observe(document, { childList:true, subtree:true, attributes:true, characterData:false });
+    }
+
+    document.addEventListener('click', onInteraction, true);
+    document.addEventListener('input', onInteraction, true);
+    document.addEventListener('change', onInteraction, true);
+  }
+  function stopTradeEnhancer(){
+    try{
+      if(updateInterval){ clearInterval(updateInterval); updateInterval = null; }
+      if(mo){ mo.disconnect(); mo = null; }
+      document.removeEventListener('click', onInteraction, true);
+      document.removeEventListener('input', onInteraction, true);
+      document.removeEventListener('change', onInteraction, true);
+    }catch(e){}
+  }
+  function onInteraction(e){
+    if(window.__pekora_trade_interact_debounce) clearTimeout(window.__pekora_trade_interact_debounce);
+    window.__pekora_trade_interact_debounce = setTimeout(()=> updateAllTradeAnnotations(), 50);
+  }
+
+
+  (function hijackHistorySimple(){
+    const _push = history.pushState;
+    history.pushState = function(){
+      _push.apply(this, arguments);
+      window.dispatchEvent(new Event("pekora_locationchange_trade"));
+    };
+    window.addEventListener("popstate", ()=> window.dispatchEvent(new Event("pekora_locationchange_trade")));
+    window.addEventListener("pekora_locationchange_trade", () => {
+      setTimeout(()=> {
+        if(/\/Trade\/TradeWindow\.aspx/i.test(location.pathname)) startTradeEnhancer();
+        else stopTradeEnhancer();
+      }, 300);
+    });
+  })();
+
+  window.addEventListener("locationchange", ()=> {
+    if(/\/Trade\/TradeWindow\.aspx/i.test(location.pathname)) startTradeEnhancer(); else stopTradeEnhancer();
+  });
+
+  setTimeout(()=> {
+    if(/\/Trade\/TradeWindow\.aspx/i.test(location.pathname)) startTradeEnhancer();
+  }, 700);
+
+  if(!window.__pekoraEnhancer) window.__pekoraEnhancer = {};
+  Object.assign(window.__pekoraEnhancer, {
+    reScan: ()=> updateAllTradeAnnotations(),
+    reloadValues: async ()=> { await loadValues(); updateAllTradeAnnotations(); },
+    dataCount: ()=> valueMap.size,
+    sample: ()=> Array.from(valueMap.entries()).slice(0,12)
+  });
+
+
+  window.addEventListener("beforeunload", ()=> { try{ stopTradeEnhancer(); }catch(e){} });
+
+  log("KoroneEnhancer Ready ");
 })();
