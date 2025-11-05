@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Koromons Trading Extension
 // @namespace    arz/ami
-// @version      2.0
+// @version      2.1
 // @description  Values Show up on limiteds,User Profiles, Users Collectibles Page and Trades.
 // @match        *://pekora.zip/*
 // @match        *://www.Pekora.zip/*
