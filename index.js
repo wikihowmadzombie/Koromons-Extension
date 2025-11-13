@@ -258,6 +258,42 @@
       return true;
     }catch(e){ console.error(LOG, "insertValueUnderImageOnce error", e); return false; }
   }
+// Adds a "View on Koromons" link below "By ROBLOX"
+function insertViewOnKoromonsLink() {
+  if (!/\/catalog\/\d+(?:\/|$|\?)/i.test(location.pathname)) return;
+
+  // Find "By ROBLOX" element
+  const byRobloxEl = Array.from(document.querySelectorAll('p, span, div'))
+    .find(el => el.textContent.trim().toLowerCase().startsWith('by roblox'));
+
+  if (!byRobloxEl || byRobloxEl.dataset.koromonsLinked) return;
+
+  // Extract item ID from URL
+  const match = location.pathname.match(/\/catalog\/(\d+)/i);
+  if (!match) return;
+  const itemId = match[1];
+
+  // Create the link element
+  const link = document.createElement('a');
+  link.href = `https://koromons.xyz/item/${itemId}`;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = 'View on Koromons';
+  link.style.cssText = `
+    display: block;
+    color: #0095ff;
+    font-weight: 600;
+    margin-top: 4px;
+    text-decoration: none;
+  `;
+
+  // Insert right after "By ROBLOX"
+  byRobloxEl.insertAdjacentElement('afterend', link);
+  byRobloxEl.dataset.koromonsLinked = 'true';
+}
+
+// Keep rechecking in case the page updates dynamically
+setInterval(insertViewOnKoromonsLink, 1500);
 
   function tryInsertValueWithRetries(maxAttempts = 14, intervalMs = 450){
     let attempts = 0;
@@ -1167,95 +1203,83 @@ imgEl.addEventListener('mouseenter', (ev) =>
   }
 
 
-  function computeTradeTotals(){
-    try{
-      const { offerRow, requestRow } = findOfferRequestAreas();
-      let offerTotal = 0, requestTotal = 0;
+function computeTradeTotals(){
+  try{
+    const { offerRow, requestRow } = findOfferRequestAreas();
+    let offerTotal = 0, requestTotal = 0;
 
-      if(offerRow){
-        const imgs = Array.from(offerRow.querySelectorAll('img')).filter(isLikelyThumbnail);
-        if(imgs.length){
-          for(const img of imgs){
-            const attach = img.closest('td, .itemColEntry-0-2-133, .col-3, .card') || img.parentElement;
-            const v = Number(attach && attach.dataset && attach.dataset.pekoraValue ? Number(attach.dataset.pekoraValue) : 0) || 0;
-            offerTotal += v;
-          }
-        } else {
-          const cards = Array.from(offerRow.querySelectorAll('.itemCard-0-2-134, .card'));
-          for(const c of cards){
-            const v = Number(c.dataset && c.dataset.pekoraValue ? Number(c.dataset.pekoraValue) : 0) || 0;
-            offerTotal += v;
-          }
+    // helper to safely get value or RAP
+    function getEffectiveValue(el){
+      if(!el) return 0;
+      let val = Number(el.dataset?.pekoraValue || 0);
+      if(!val || isNaN(val) || val <= 0){
+        // try to find RAP text nearby
+        const rapEl = Array.from(el.querySelectorAll('p, span, div'))
+          .find(e => /rap[:\s]*[\d,]+/i.test(e.textContent));
+        if(rapEl){
+          const rapVal = Number(rapEl.textContent.replace(/[^0-9.-]/g,''));
+          if(rapVal > 0) val = rapVal;
         }
-        try{
-          const plusInput = offerRow.closest('.offerRequestCard-0-2-34')?.querySelector('input.robuxInput-0-2-122, input[type="text"].robuxInput-0-2-122') ||
-                            offerRow.querySelector('input[type="text"], input');
-          if(plusInput && plusInput.value) offerTotal += Number((plusInput.value||'').replace(/[^0-9.-]/g,'')) || 0;
-        }catch(e){}
       }
+      return val || 0;
+    }
 
-      if(requestRow){
-        const imgs = Array.from(requestRow.querySelectorAll('img')).filter(isLikelyThumbnail);
-        if(imgs.length){
-          for(const img of imgs){
-            const attach = img.closest('td, .itemColEntry-0-2-133, .col-3, .card') || img.parentElement;
-            const v = Number(attach && attach.dataset && attach.dataset.pekoraValue ? Number(attach.dataset.pekoraValue) : 0) || 0;
-            requestTotal += v;
-          }
-        } else {
-          const cards = Array.from(requestRow.querySelectorAll('.itemCard-0-2-134, .card'));
-          for(const c of cards){
-            const v = Number(c.dataset && c.dataset.pekoraValue ? Number(c.dataset.pekoraValue) : 0) || 0;
-            requestTotal += v;
-          }
+    // helper to safely get Robux value
+    function getRobuxValue(root){
+      if(!root) return 0;
+      try{
+        // first, check for input fields
+        const input = root.closest('.offerRequestCard-0-2-34')?.querySelector('input.robuxInput-0-2-122, input[type="text"].robuxInput-0-2-122') ||
+                      root.querySelector('input[type="text"], input[type="number"], input');
+        if(input && input.value) return Number((input.value || '').replace(/[^0-9.-]/g,'')) || 0;
+
+        // then look for textual Robux labels
+        const textEl = Array.from(root.querySelectorAll('p, span, div'))
+          .find(e => /robux[:\s]*[\d,]+/i.test(e.textContent));
+        if(textEl){
+          const robuxVal = Number(textEl.textContent.replace(/[^0-9.-]/g,''));
+          if(robuxVal > 0) return robuxVal;
         }
-        try{
-          const plusInput = requestRow.closest('.offerRequestCard-0-2-34')?.querySelector('input.robuxInput-0-2-122, input[type="text"].robuxInput-0-2-122') ||
-                            requestRow.querySelector('input[type="text"], input');
-          if(plusInput && plusInput.value) requestTotal += Number((plusInput.value||'').replace(/[^0-9.-]/g,'')) || 0;
-        }catch(e){}
+      }catch(e){}
+      return 0;
+    }
+
+    if(offerRow){
+      const imgs = Array.from(offerRow.querySelectorAll('img')).filter(isLikelyThumbnail);
+      if(imgs.length){
+        for(const img of imgs){
+          const attach = img.closest('td, .itemColEntry-0-2-133, .col-3, .card') || img.parentElement;
+          offerTotal += getEffectiveValue(attach);
+        }
+      } else {
+        const cards = Array.from(offerRow.querySelectorAll('.itemCard-0-2-134, .card'));
+        for(const c of cards) offerTotal += getEffectiveValue(c);
       }
-
-      return { offerTotal, requestTotal };
-    }catch(e){
-      console.error(LOG, "computeTradeTotals err", e);
-      return { offerTotal:0, requestTotal:0 };
+      offerTotal += getRobuxValue(offerRow);
     }
+
+    if(requestRow){
+      const imgs = Array.from(requestRow.querySelectorAll('img')).filter(isLikelyThumbnail);
+      if(imgs.length){
+        for(const img of imgs){
+          const attach = img.closest('td, .itemColEntry-0-2-133, .col-3, .card') || img.parentElement;
+          requestTotal += getEffectiveValue(attach);
+        }
+      } else {
+        const cards = Array.from(requestRow.querySelectorAll('.itemCard-0-2-134, .card'));
+        for(const c of cards) requestTotal += getEffectiveValue(c);
+      }
+      requestTotal += getRobuxValue(requestRow);
+    }
+
+    return { offerTotal, requestTotal };
+  }catch(e){
+    console.error(LOG, "computeTradeTotals err", e);
+    return { offerTotal:0, requestTotal:0 };
   }
+}
 
-  function createOrUpdateFloatingSummary(offerTotal, requestTotal){
-    let el = document.getElementById('__pekora_trade_floating_summary');
-    const diff = Number(requestTotal) - Number(offerTotal);
-    const formattedOffer = formatNumber(offerTotal);
-    const formattedRequest = formatNumber(requestTotal);
-    const formattedDiff = (diff > 0 ? `+${formatNumber(diff)}` : formatNumber(diff));
-    if(!el){
-      el = document.createElement('div');
-      el.id = '__pekora_trade_floating_summary';
-      el.className = 'custom-overpay-summary';
-      el.style.position = 'fixed';
-      el.style.left = '12px';
-      el.style.bottom = '12px';
-el.innerHTML = `
-  <div class="title">Trade Summary</div>
-  <div class="line"><span>You're offering</span><span class="numbers offer-num"></span></div>
-  <div class="line"><span>They're offering</span><span class="numbers request-num"></span></div>
-  <div class="line"><span>Difference</span><span class="numbers diff-num"></span></div> `;
 
-      document.body.appendChild(el);
-    }
-    const offerNode = el.querySelector('.offer-num');
-    const reqNode = el.querySelector('.request-num');
-    const diffNode = el.querySelector('.diff-num');
-    if(offerNode) offerNode.textContent = formattedOffer;
-    if(reqNode) reqNode.textContent = formattedRequest;
-    if(diffNode){
-      diffNode.textContent = formattedDiff;
-      diffNode.classList.remove('pos','neg');
-      if(diff > 0) diffNode.classList.add('pos');
-      else if(diff < 0) diffNode.classList.add('neg');
-    }
-  }
 
 
   function updateAllTradeAnnotations(){
